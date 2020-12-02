@@ -70,28 +70,34 @@ class FeatureExtraction(nn.Module):
                     padding=2))
             in_channel = out_channel
             out_channel = 32
+
         self.residual_blocks = nn.ModuleList()
         for _ in range(6):
             self.residual_blocks.append(
                 BasicBlock(
                     32, 32, stride=1, downsample=None, pad=1, dilation=1))
         self.conv_alone = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1)
+
     def forward(self, rgb_img):
         output = rgb_img
         for i in range(self.k):
             output = self.downsample[i](output)
+
         for block in self.residual_blocks:
             output = block(output)
+
         return self.conv_alone(output)
 
 class EdgeAwareRefinement(nn.Module):
     def __init__(self, in_channel):
         super().__init__()
+
         self.conv2d_feature = nn.Sequential(
             convbn(in_channel, 32, kernel_size=3, stride=1, pad=1, dilation=1),
             nn.LeakyReLU(negative_slope=0.2, inplace=True))
+
         self.residual_astrous_blocks = nn.ModuleList()
-        astrous_list = [1, 2, 4, 8 , 1 , 1]
+        astrous_list = [1, 2, 4, 8, 1, 1]
         for di in astrous_list:
             self.residual_astrous_blocks.append(
                 BasicBlock(
@@ -100,16 +106,20 @@ class EdgeAwareRefinement(nn.Module):
         self.conv2d_out = nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1)
 
     def forward(self, low_disparity, corresponding_rgb):
+        
         output = torch.unsqueeze(low_disparity, dim=1)
+
         twice_disparity = F.interpolate(
             output,
             size = corresponding_rgb.size()[-2:],
             mode='bilinear',
             align_corners=False)
+        
         if corresponding_rgb.size()[-1]/ low_disparity.size()[-1] >= 1.5:
             twice_disparity *= 8   
-        output = self.conv2d_feature(
-            torch.cat([twice_disparity, corresponding_rgb], dim=1))
+        
+        output = self.conv2d_feature(torch.cat([twice_disparity, corresponding_rgb], dim=1))
+
         for astrous_block in self.residual_astrous_blocks:
             output = astrous_block(output)
         
@@ -133,19 +143,21 @@ class StereoNet(nn.Module):
         super().__init__()
         self.maxdisp = maxdisp
         self.k = k
-        self.r = r
+        self.r = r # refinement stages
         self.feature_extraction = FeatureExtraction(k)
+
         self.filter = nn.ModuleList()
         for _ in range(4):
             self.filter.append(
                 nn.Sequential(
                     convbn_3d(32, 32, kernel_size=3, stride=1, pad=1),
                     nn.LeakyReLU(negative_slope=0.2, inplace=True)))
+
         self.conv3d_alone = nn.Conv3d(
             32, 1, kernel_size=3, stride=1, padding=1)
         
         self.edge_aware_refinements = nn.ModuleList()
-        for _ in range(1):
+        for _ in range(r):
             self.edge_aware_refinements.append(EdgeAwareRefinement(4))
     
     def forward(self, left, right):
@@ -159,6 +171,7 @@ class StereoNet(nn.Module):
                                  disp,
                                  refimg_feature.size()[2],
                                  refimg_feature.size()[3]).zero_().cuda()
+
         for i in range(disp):
             if i > 0:
                 cost[:, :, i, :, i:] = refimg_feature[ :, :, :, i:] - targetimg_feature[:, :, :, :-i]
@@ -167,10 +180,9 @@ class StereoNet(nn.Module):
         cost = cost.contiguous()
 
 
-
-
         for f in self.filter:
             cost = f(cost)
+            
         cost = self.conv3d_alone(cost)
         cost = torch.squeeze(cost, 1)
         pred = F.softmax(cost, dim=1)
@@ -181,21 +193,21 @@ class StereoNet(nn.Module):
         
         pred_pyramid_list= [pred]
 
+        for i in range(self.r):
+            pred_pyramid_list.append(self.edge_aware_refinements[i](
+                        pred_pyramid_list[i], img_pyramid_list[0]))
 
+        # TODO: img_pyramid_list what is this. how to use it
 
-        pred_pyramid_list.append(self.edge_aware_refinements[0](
-                    pred_pyramid_list[0], img_pyramid_list[0]))
-
-        for i in range(1):
-            pred_pyramid_list[i] = pred_pyramid_list[i]* (
-                left.size()[-1] / pred_pyramid_list[i].size()[-1])
+        for i in range(self.r):
+            pred_pyramid_list[i] = pred_pyramid_list[i]* (left.size()[-1] / pred_pyramid_list[i].size()[-1])
             pred_pyramid_list[i] = torch.squeeze(
-            F.interpolate(
-                torch.unsqueeze(pred_pyramid_list[i], dim=1),
-                size=left.size()[-2:],
-                mode='bilinear',
-                align_corners=False),
-            dim=1)
+                                            F.interpolate(
+                                                torch.unsqueeze(pred_pyramid_list[i], dim=1),
+                                                size=left.size()[-2:],
+                                                mode='bilinear',
+                                                align_corners=False),
+                                            dim=1)
 
         #return pred_pyramid_list
         return pred_pyramid_list

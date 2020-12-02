@@ -13,11 +13,10 @@ import torchvision
 import torch.utils.data
 import torch.nn.functional as F
 import time
-from dataloader import listflowfile as lt 
-from dataloader import SecenFlowLoader as DA
+from dataloader.TARTANAIRLoader import TartanairLoader as DA
 import utils.logger as logger
 from utils.utils import GERF_loss, smooth_L1_loss
-from models.StereoNet8Xmulti import StereoNet
+from models.StereoNet_single import StereoNet
 from os.path import join, split, isdir, isfile, splitext, split, abspath, dirname
 import cv2 as cv
 import numpy as np
@@ -57,25 +56,14 @@ def main():
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
-    train_left_img, train_right_img, train_left_disp, test_left_img, test_right_img, test_left_disp = lt.dataloader(
-        args.datapath)
-    train_left_img.sort()
-    train_right_img.sort()
-    train_left_disp.sort()
-
-    test_left_img.sort()
-    test_right_img.sort()
-    test_left_disp.sort()
-    
-
     __normalize = {'mean': [0.0, 0.0, 0.0], 'std': [1.0, 1.0, 1.0]}
     TrainImgLoader = torch.utils.data.DataLoader(
-        DA.myImageFloder(train_left_img, train_right_img, train_left_disp, True, normalize=__normalize),
+        DA(args.datapath, split  = 'train', normalize=__normalize),
         batch_size=args.train_bsize, shuffle=False, num_workers=1, drop_last=False)
 
     TestImgLoader = torch.utils.data.DataLoader(
-        DA.myImageFloder(test_left_img, test_right_img, test_left_disp, False, normalize=__normalize),
-        batch_size=args.test_bsize, shuffle=False, num_workers=4, drop_last=False)
+        DA(args.datapath, split  = 'test', normalize=__normalize),
+        batch_size=args.test_bsize, shuffle=False, num_workers=1, drop_last=False)
 
     if not os.path.isdir(args.save_path):
         os.makedirs(args.save_path)
@@ -144,16 +132,12 @@ def train(dataloader, model, optimizer, log, epoch=0):
         disp_L = disp_L.float().cuda()
 
         outputs = model(imgL, imgR)
-        
-        
-
         outputs = [torch.squeeze(output, 1) for output in outputs]
-        
-        loss = [GERF_loss(disp_L, outputs[0], args)]
-        for i in range(len(outputs)-1):
-            loss.append(GERF_loss(disp_L, outputs[i+1], args))
 
-        
+        loss = [smooth_L1_loss(disp_L, outputs[0], args)]
+        for i in range(len(outputs)-1):
+            loss.append(smooth_L1_loss(disp_L, outputs[i+1], args))
+
         counter +=1
         loss_all = sum(loss)/(args.itersize)
         loss_all.backward()
@@ -183,7 +167,7 @@ def train(dataloader, model, optimizer, log, epoch=0):
             all_results[-1, 0, :, :] = disp_L[:, :]/255.0
             torchvision.utils.save_image(all_results, join(args.save_path, "iter-%d.jpg" % batch_idx))
             # print(imgL)
-            im = np.array(imgL[0,:,:,:].permute(1,2,0)*255, dtype=np.uint8)
+            im = np.array(imgL[0,:,:,:].permute(1,2,0).cpu()*255, dtype=np.uint8)
         
             cv.imwrite(join(args.save_path, "itercolor-%d.jpg" % batch_idx),im)
 
