@@ -9,6 +9,7 @@ import numpy as np
 from . import preprocess 
 
 import torch.utils.data as data
+import torchvision.transforms.functional as TF
 
 from PIL import Image
 import os
@@ -28,29 +29,73 @@ def default_loader(path):
 
 def disparity_loader(path):
 
-    BASELINE=0.25
-    FOCAL_LENGTH=320
-
     dataL = np.load(path)
-    dataL = BASELINE * FOCAL_LENGTH / dataL
+    dataL = 0.25 * 320 / dataL
 
     return dataL
 
+def custom_transform(im, flip, degree, scale, h_start, w_start, interpolation = Image.BICUBIC):
 
+    # Horizontal flip
+    #if flip > 0.5:
+    #    TF.hflip(im)
+
+    # Rotation
+    #im = TF.rotate(im, angle=degree, resample=interpolation)
+
+    # Resize
+    im = TF.resize(im, scale, interpolation)
+
+    # Crop
+    #im = TF.crop(im, h_start, w_start, 480, 640)
+
+    return im
+
+def custom_transform_K(K, flip, degree, _scale, h_start, w_start):
+
+    # Horizontal flip
+    #if flip > 0.5:
+    #    K[2] = 480 - K[2]
+
+    # Scale
+    K[0] = K[0] * _scale
+    K[1] = K[1] * _scale
+    K[2] = K[2] * _scale
+    K[3] = K[3] * _scale
+
+    # Crop
+    #K[2] = K[2] - w_start
+    #K[3] = K[3] - h_start
+
+    return K
+
+def custom_color_transform(rgb):
+
+    # Color jitter
+    brightness = np.random.uniform(0.6, 1.4)
+    contrast = np.random.uniform(0.6, 1.4)
+    saturation = np.random.uniform(0.6, 1.4)
+
+    rgb = TF.adjust_brightness(rgb, brightness)
+    rgb = TF.adjust_contrast(rgb, contrast)
+    rgb = TF.adjust_saturation(rgb, saturation)
+
+    return rgb
 
 class TartanairLoader(data.Dataset):
     def __init__(self, datapath, normalize, split = 'train', loader=default_loader, dploader= disparity_loader):
  
-        train_left_img, train_right_img, train_left_depth = dataloader(datapath, split)
-        print(len(train_left_img))
+        left_img, right_img, left_depth = dataloader(datapath, split)
 
-        self.left = train_left_img
-        self.right = train_right_img
-        self.depth_L = train_left_depth
+        self.left = left_img
+        self.right = right_img
+        self.depth_L = left_depth
         self.loader = loader
         self.dploader = dploader
         self.training = True if split == 'train' else False
         self.normalize =normalize
+        self.K = np.asarray([320.0,320.0,320.0,240.0])
+
 
     def __getitem__(self, index):
         left  = self.left[index]
@@ -60,46 +105,49 @@ class TartanairLoader(data.Dataset):
         left_img = self.loader(left)
         right_img = self.loader(right)
         dataL = self.dploader(depth_L)
+        K = self.K
 
-        """
-        import matplotlib.pyplot as plt
-        plt.figure(figsize=(15,5))
-        plt.subplot(1,3,1)
-        plt.imshow(left_img)
-        plt.subplot(1,3,2)
-        plt.imshow(right_img)
-        plt.subplot(1,3,3)
-        plt.imshow(dataL)
-        plt.show()
-        """
-        if False: #self.training:  
-           w, h = left_img.size
-           th, tw = 50, 50
- 
-           x1 = random.randint(0, w - tw)
-           y1 = random.randint(0, h - th)
+        if self.training:  
 
-           left_img = left_img.crop((x1, y1, x1 + tw, y1 + th))
-           right_img = right_img.crop((x1, y1, x1 + tw, y1 + th))
+            
+            #TODO: Hozizontal flipping means left becomes right?
+            #TODO: Rotation happens around wrong axis
 
-           dataL = np.ascontiguousarray(dataL,dtype=np.float32)/256
-           dataL = dataL[y1:y1 + th, x1:x1 + tw]
+            #_scale = np.random.uniform(1.0, 1.5)
+            #scale = np.int(height * _scale)
+            #degree = 0 #np.random.uniform(-5.0, 5.0)
+            #flip = 0 #np.random.uniform(0.0, 1.0)
 
-           processed = preprocess.get_transform(augment=False, normalize=self.normalize)  
-           left_img   = processed(left_img)
-           right_img  = processed(right_img)
+            #h_start = random.randint(0, 80)
+            #w_start = random.randint(0, 120)
 
-           return left_img, right_img, dataL
+            #dataL = Image.fromarray(dataL)
+            #K = custom_transform_K(K, flip, degree, _scale, h_start, w_start)
+            #left_img = custom_transform(left_img, flip, degree, scale, h_start, w_start, Image.BICUBIC)
+            #right_img = custom_transform(right_img, flip, degree, scale, h_start, w_start, Image.BICUBIC)
+            #dataL = custom_transform(dataL, flip, degree, scale, h_start, w_start, Image.NEAREST)
+
+            left_img_aug = custom_color_transform(left_img)
+            right_img_aug = custom_color_transform(right_img)
+
+            processed = preprocess.get_transform(augment=False, normalize=self.normalize)  
+            left_img       = processed(left_img)
+            right_img      = processed(right_img)
+            left_img_aug   = processed(left_img_aug)
+            right_img_aug  = processed(right_img_aug)
+
+            dataL = np.ascontiguousarray(dataL, dtype=np.float32)
+            #dataL = dataL / _scale
+
+            return left_img, right_img, dataL, K, left_img_aug, right_img_aug
         else:
-           w, h = left_img.size
-
            dataL = np.ascontiguousarray(dataL,dtype=np.float32) #/256
 
            processed = preprocess.get_transform(augment=False, normalize=self.normalize)  
            left_img       = processed(left_img)
            right_img      = processed(right_img)
 
-           return left_img, right_img, dataL
+           return left_img, right_img, dataL, K, left_img, right_img
 
     def __len__(self):
         return len(self.left)

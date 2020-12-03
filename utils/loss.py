@@ -128,6 +128,79 @@ class Intrinsics:
                      self.cu))
 
 
+def _SSIM(x, y):
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+
+    mu_x = nn.AvgPool2d(3, 1)(x)
+    mu_y = nn.AvgPool2d(3, 1)(y)
+    mu_x_mu_y = mu_x * mu_y
+    mu_x_sq = mu_x.pow(2)
+    mu_y_sq = mu_y.pow(2)
+
+    sigma_x = nn.AvgPool2d(3, 1)(x * x) - mu_x_sq
+    sigma_y = nn.AvgPool2d(3, 1)(y * y) - mu_y_sq
+    sigma_xy = nn.AvgPool2d(3, 1)(x * y) - mu_x_mu_y
+
+    SSIM_n = (2 * mu_x_mu_y + C1) * (2 * sigma_xy + C2)
+    SSIM_d = (mu_x_sq + mu_y_sq + C1) * (sigma_x + sigma_y + C2)
+    SSIM = SSIM_n / SSIM_d
+
+    SSIM_img = torch.clamp((1 - SSIM) / 2, 0, 1)
+
+    return F.pad(SSIM_img, pad=(1, 1, 1, 1), mode='constant', value=0)
+
+
+
+class L1Loss(nn.Module):
+    def __init__(self, args):
+        super(L1Loss, self).__init__()
+
+        self.args = args
+        self.t_valid = 0.0001
+
+    def forward(self, gt, pred):
+        gt = torch.clamp(gt, min=0, max=self.args.maxdisp)
+        pred = torch.clamp(pred, min=0, max=self.args.maxdisp)
+
+        mask = (gt > self.t_valid).type_as(pred).detach()
+
+        d = torch.abs(pred - gt) * mask
+
+        d = torch.sum(d, dim=[1, 2, 3])
+        num_valid = torch.sum(mask, dim=[1, 2, 3])
+
+        loss = d / (num_valid + 1e-8)
+
+        loss = loss.sum()
+
+        return loss
+
+class L2Loss(nn.Module):
+    def __init__(self, args):
+        super(L2Loss, self).__init__()
+
+        self.args = args
+        self.t_valid = 0.0001
+
+    def forward(self, gt, pred):
+        gt = torch.clamp(gt, min=0, max=self.args.maxdisp)
+        pred = torch.clamp(pred, min=0, max=self.args.maxdisp)
+
+        mask = (gt > self.t_valid).type_as(pred).detach()
+
+        d = torch.pow(pred - gt, 2) * mask
+
+        d = torch.sum(d, dim=[1, 2, 3])
+        num_valid = torch.sum(mask, dim=[1, 2, 3])
+
+        loss = d / (num_valid + 1e-8)
+
+        loss = loss.sum()
+
+        return loss
+
+
 class PhotometricLoss(nn.Module):
     def __init__(self):
         super(PhotometricLoss, self).__init__()
@@ -141,12 +214,12 @@ class PhotometricLoss(nn.Module):
 
     def forward(self, rgb_right, rgb_left, depth_right):
 
-
         # compute the corresponding intrinsic parameters
         batch, channel, height_, width_ = depth_right.shape
+        #intrinsics_ = self.intrinsics.scale(height_, width_)
 
         # inverse warp from a nearby frame to the current frame
-        warped_ = homography_from(rgb_left, depth_right, self.r_mat, self.t_vec, self.intrinsics)
+        warped_ = homography_from(rgb_left, depth_right, self.r_mat, self.t_vec, self.intrinsics_)
         
         """
         plt.imshow(rgb_left[0].permute(1,2,0) / 255.0)
@@ -156,16 +229,18 @@ class PhotometricLoss(nn.Module):
         plt.imshow(warped_[0].permute(1,2,0) / 255.0)
         plt.show()
         """
+
         
-        diff = (warped_ - rgb_right).abs()
+        
+        #diff = (warped_ - rgb_right).abs()
+        #diff = torch.sum(diff, 1)  # sum along the color channel
+        diff = _SSIM(warped_, rgb_right)
 
         """
         plt.imshow(diff[0].permute(1,2,0) / 255.0)
         plt.show()
         """
-        
-        diff = torch.sum(diff, 1)  # sum along the color channel
-        
+                
         # compare only pixels that are not black
         valid_mask = (torch.sum(warped_, 1) > 0).float() * (torch.sum(rgb_left, 1) > 0).float()
         valid_mask = valid_mask.byte().detach()
@@ -204,5 +279,56 @@ class InputOutputLoss(nn.Module):
         mask.detach_()
         # loss = F.smooth_l1_loss(pred[mask], GT[mask], size_average=True)
         loss = (input[mask] - output[mask]).abs().mean()
+
+        return loss
+
+class SmoothnessLoss(nn.Module):
+    def __init__(self):
+        super(SmoothnessLoss, self).__init__()
+
+    def forward(self, depth):
+        def second_derivative(x):
+            assert x.dim(
+            ) == 4, "expected 4-dimensional data, but instead got {}".format(
+                x.dim())
+            horizontal = 2 * x[:, :, 1:-1, 1:-1] - x[:, :, 1:-1, :
+                                                     -2] - x[:, :, 1:-1, 2:]
+            vertical = 2 * x[:, :, 1:-1, 1:-1] - x[:, :, :-2, 1:
+                                                   -1] - x[:, :, 2:, 1:-1]
+            der_2nd = horizontal.abs() + vertical.abs()
+            return der_2nd.mean()
+
+        self.loss = second_derivative(depth)
+        return self.loss
+
+
+class Loss(nn.Module):
+    def __init__(self, args):
+        super(Loss, self).__init__()
+
+        loss = args.loss.split("+")
+        self.fn = []
+        self.weights = []
+        for l in loss:
+            w, ln = l.split("*")
+            if ln == 'l1':
+                loss_fn = L1Loss(args)
+            elif ln == 'l2':
+                loss_fn = L1Loss(args)
+            elif ln == 'photo':
+                loss_fn = L1Loss(args)
+            elif ln == 'smooth':
+                loss_fn = L1Loss(args)
+            elif ln == 'inputoutput':
+                loss_fn = L1Loss(args)
+
+            self.fn.append(loss)
+            self.weights.append(float(w))
+
+    def forward(self, GT, pred):
+        
+        loss = 0
+        for w, fn in zip(self.weights, self.loss):
+            loss += w * fn(GT, pred)
 
         return loss

@@ -17,6 +17,7 @@ from dataloader.TARTANAIRLoader import TartanairLoader as DA
 import utils.logger as logger
 import tensorboard
 from utils.utils import GERF_loss, smooth_L1_loss
+from utils.loss import Loss # L1Loss, L2Loss, PhotometricLoss, SmoothnessLoss, InputOutputLoss
 from models.StereoNet_single import StereoNet
 from os.path import join, split, isdir, isfile, splitext, split, abspath, dirname
 import cv2 as cv
@@ -47,6 +48,7 @@ parser.add_argument('--gamma', '--gm', default=0.6, type=float,
 parser.add_argument('--print_freq', type=int, default=100, help='print frequence')
 parser.add_argument('--stages', type=int, default=4, help='the stage num of refinement')
 parser.add_argument('--gpu', default='0', type=str, help='GPU ID')
+parser.add_argument('--loss', default='1.0*l1+1.0*l2', type=str, help='loss functions')
 
 args = parser.parse_args()
 
@@ -134,13 +136,15 @@ def train(dataloader, model, optimizer, log, writer, epoch=0):
 
     model.train()
 
-    for batch_idx, (imgL, imgR, disp_L) in enumerate(dataloader):
+    for batch_idx, (imgL, imgR, disp_L, K, imgL_aug, imgR_aug) in enumerate(dataloader):
         
         imgL = imgL.float().cuda()
         imgR = imgR.float().cuda()
+        imgL_aug = imgL_aug.float().cuda()
+        imgR_aug = imgR_aug.float().cuda()
         disp_L = disp_L.float().cuda()
 
-        outputs = model(imgL, imgR)
+        outputs = model(imgL_aug, imgR_aug)
         outputs = [torch.squeeze(output, 1) for output in outputs]
 
         loss = [smooth_L1_loss(disp_L, outputs[0], args)]
