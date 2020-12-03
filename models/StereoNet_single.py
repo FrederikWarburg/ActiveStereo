@@ -137,7 +137,6 @@ class disparityregression(nn.Module):
         out = torch.sum(x * disp, 1)
         return out
 
-
 class StereoNet(nn.Module):
     def __init__(self, k, r, maxdisp=192):
         super().__init__()
@@ -182,7 +181,7 @@ class StereoNet(nn.Module):
 
         for f in self.filter:
             cost = f(cost)
-            
+
         cost = self.conv3d_alone(cost)
         cost = torch.squeeze(cost, 1)
         pred = F.softmax(cost, dim=1)

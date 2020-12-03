@@ -109,7 +109,6 @@ class TartanairLoader(data.Dataset):
 
         if self.training:  
 
-            
             #TODO: Hozizontal flipping means left becomes right?
             #TODO: Rotation happens around wrong axis
 
