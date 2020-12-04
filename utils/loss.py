@@ -166,9 +166,9 @@ class L1Loss(nn.Module):
         mask = (gt > self.t_valid).type_as(pred).detach()
 
         d = torch.abs(pred - gt) * mask
-
-        d = torch.sum(d, dim=[1, 2, 3])
-        num_valid = torch.sum(mask, dim=[1, 2, 3])
+        
+        d = torch.sum(d, dim=[1, 2])
+        num_valid = torch.sum(mask, dim=[1, 2])
 
         loss = d / (num_valid + 1e-8)
 
@@ -191,8 +191,8 @@ class L2Loss(nn.Module):
 
         d = torch.pow(pred - gt, 2) * mask
 
-        d = torch.sum(d, dim=[1, 2, 3])
-        num_valid = torch.sum(mask, dim=[1, 2, 3])
+        d = torch.sum(d, dim=[1, 2])
+        num_valid = torch.sum(mask, dim=[1, 2])
 
         loss = d / (num_valid + 1e-8)
 
@@ -308,27 +308,36 @@ class Loss(nn.Module):
 
         loss = args.loss.split("+")
         self.fn = []
+        self.ln = [] 
         self.weights = []
         for l in loss:
             w, ln = l.split("*")
             if ln == 'l1':
                 loss_fn = L1Loss(args)
             elif ln == 'l2':
-                loss_fn = L1Loss(args)
+                loss_fn = L2Loss(args)
             elif ln == 'photo':
-                loss_fn = L1Loss(args)
+                loss_fn = PhotometricLoss(args)
             elif ln == 'smooth':
-                loss_fn = L1Loss(args)
+                loss_fn = SmoothnessLoss(args)
             elif ln == 'inputoutput':
-                loss_fn = L1Loss(args)
+                loss_fn = InputOutputLoss(args)
 
-            self.fn.append(loss)
+            self.fn.append(loss_fn)
+            self.ln.append(ln)
             self.weights.append(float(w))
 
-    def forward(self, GT, pred):
+    def forward(self, GT, pred, imgL, imgR, K):
         
         loss = 0
-        for w, fn in zip(self.weights, self.loss):
-            loss += w * fn(GT, pred)
+        for w, fn, ln in zip(self.weights, self.fn, self.ln):
+            
+            if ln in ['l1', 'l2']:
+                loss += w * fn(GT, pred)
+            elif ln in ['photo']:
+                depR = 0.25 * 320.0 / pred 
+                loss += w * fn(imgR, imgL, depR)
+            elif ln in ['inputoutput']:
+                loss += w * fn(GT, pred)
 
         return loss
