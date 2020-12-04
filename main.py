@@ -191,9 +191,11 @@ def test(dataloader, model, log, writer, split, epoch = 0):
 
     model.eval()
     
-    for batch_idx, (imgL, imgR, disp_L) in enumerate(dataloader):
+    for batch_idx, (imgL, imgR, disp_L, K, imgL_aug, imgR_aug) in enumerate(dataloader):
         imgL = imgL.float().cuda()
         imgR = imgR.float().cuda()
+        imgL_aug = imgL_aug.float().cuda()
+        imgR_aug = imgR_aug.float().cuda()
         disp_L = disp_L.float().cuda()
 
         mask = (disp_L < args.maxdisp) & (disp_L >= 0)
